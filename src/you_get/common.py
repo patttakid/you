@@ -75,6 +75,7 @@ SITES = {
     'tumblr'           : 'tumblr',
     'twimg'            : 'twitter',
     'twitter'          : 'twitter',
+    'ucas'             : 'ucas',
     'videomega'        : 'videomega',
     'vidto'            : 'vidto',
     'vimeo'            : 'vimeo',
@@ -86,8 +87,10 @@ SITES = {
     'xiami'            : 'xiami',
     'xiaokaxiu'        : 'yixia',
     'xiaojiadianvideo' : 'fc2video',
+    'ximalaya'         : 'ximalaya',
     'yinyuetai'        : 'yinyuetai',
     'miaopai'          : 'yixia',
+    'yizhibo'          : 'yizhibo',
     'youku'            : 'youku',
     'youtu'            : 'youtube',
     'youtube'          : 'youtube',
@@ -255,6 +258,8 @@ def undeflate(data):
 
 # DEPRECATED in favor of get_content()
 def get_response(url, faker = False):
+    logging.debug('get_response: %s' % url)
+
     # install cookies
     if cookies:
         opener = request.build_opener(request.HTTPCookieProcessor(cookies))
@@ -289,6 +294,8 @@ def get_decoded_html(url, faker = False):
         return data
 
 def get_location(url):
+    logging.debug('get_location: %s' % url)
+
     response = request.urlopen(url)
     # urllib will follow redirections and it's too much code to tell urllib
     # not to do that
@@ -394,6 +401,8 @@ def urls_size(urls, faker = False, headers = {}):
     return sum([url_size(url, faker=faker, headers=headers) for url in urls])
 
 def get_head(url, headers = {}, get_method = 'HEAD'):
+    logging.debug('get_head: %s' % url)
+
     if headers:
         req = request.Request(url, headers=headers)
     else:
@@ -403,6 +412,8 @@ def get_head(url, headers = {}, get_method = 'HEAD'):
     return dict(res.headers)
 
 def url_info(url, faker = False, headers = {}):
+    logging.debug('url_info: %s' % url)
+
     if faker:
         response = urlopen_with_retry(request.Request(url, headers=fake_headers))
     elif headers:
@@ -456,6 +467,8 @@ def url_info(url, faker = False, headers = {}):
 def url_locations(urls, faker = False, headers = {}):
     locations = []
     for url in urls:
+        logging.debug('url_locations: %s' % url)
+
         if faker:
             response = urlopen_with_retry(request.Request(url, headers=fake_headers))
         elif headers:
@@ -466,7 +479,10 @@ def url_locations(urls, faker = False, headers = {}):
         locations.append(response.url)
     return locations
 
-def url_save(url, filepath, bar, refer = None, is_part = False, faker = False, headers = {}):
+def url_save(url, filepath, bar, refer = None, is_part = False, faker = False, headers = {}, timeout = None, **kwargs):
+#When a referer specified with param refer, the key must be 'Referer' for the hack here
+    if refer is not None:
+        headers['Referer'] = refer
     file_size = url_size(url, faker = faker, headers = headers)
 
     if os.path.exists(filepath):
@@ -506,12 +522,14 @@ def url_save(url, filepath, bar, refer = None, is_part = False, faker = False, h
             headers = headers
         else:
             headers = {}
-        if received:
-            headers['Range'] = 'bytes=' + str(received) + '-'
+        headers['Range'] = 'bytes=' + str(received) + '-'
         if refer:
             headers['Referer'] = refer
 
-        response = urlopen_with_retry(request.Request(url, headers=headers))
+        if timeout:
+            response = urlopen_with_retry(request.Request(url, headers=headers), timeout=timeout)
+        else:
+            response = urlopen_with_retry(request.Request(url, headers=headers))
         try:
             range_start = int(response.headers['content-range'][6:].split('/')[0].split('-')[0])
             end_length = int(response.headers['content-range'][6:].split('/')[1])
@@ -718,7 +736,10 @@ class DummyProgressBar:
 def get_output_filename(urls, title, ext, output_dir, merge):
     # lame hack for the --output-filename option
     global output_filename
-    if output_filename: return output_filename
+    if output_filename:
+        if ext:
+            return output_filename + '.' + ext
+        return output_filename
 
     merged_ext = ext
     if (len(urls) > 1) and merge:
@@ -775,7 +796,7 @@ def download_urls(urls, title, ext, total_size, output_dir='.', refer=None, merg
         url = urls[0]
         print('Downloading %s ...' % tr(output_filename))
         bar.update()
-        url_save(url, output_filepath, bar, refer = refer, faker = faker, headers = headers)
+        url_save(url, output_filepath, bar, refer = refer, faker = faker, headers = headers, **kwargs)
         bar.done()
     else:
         parts = []
@@ -787,7 +808,7 @@ def download_urls(urls, title, ext, total_size, output_dir='.', refer=None, merg
             parts.append(filepath)
             #print 'Downloading %s [%s/%s]...' % (tr(filename), i + 1, len(urls))
             bar.update_piece(i + 1)
-            url_save(url, filepath, bar, refer = refer, is_part = True, faker = faker, headers = headers)
+            url_save(url, filepath, bar, refer = refer, is_part = True, faker = faker, headers = headers, **kwargs)
         bar.done()
 
         if not merge:
@@ -1036,7 +1057,7 @@ def print_info(site_info, title, type, size):
         type_info = "Advanced Systems Format (%s)" % type
     #elif type in ['video/mpeg']:
     #    type_info = "MPEG video (%s)" % type
-    elif type in ['audio/mp4']:
+    elif type in ['audio/mp4', 'audio/m4a']:
         type_info = "MPEG-4 audio (%s)" % type
     elif type in ['audio/mpeg']:
         type_info = "MP3 (%s)" % type
@@ -1169,16 +1190,18 @@ def script_main(script_name, download, download_playlist, **kwargs):
     -s | --socks-proxy <HOST:PORT>      Use an SOCKS5 proxy for downloading.
     -t | --timeout <SECONDS>            Set socket timeout.
     -d | --debug                        Show traceback and other debug info.
+    -I | --input-file                   Read non-playlist urls from file.
     '''
 
-    short_opts = 'Vhfiuc:ndF:O:o:p:x:y:s:t:'
-    opts = ['version', 'help', 'force', 'info', 'url', 'cookies', 'no-caption', 'no-merge', 'no-proxy', 'debug', 'json', 'format=', 'stream=', 'itag=', 'output-filename=', 'output-dir=', 'player=', 'http-proxy=', 'socks-proxy=', 'extractor-proxy=', 'lang=', 'timeout=']
-    if download_playlist:
-        short_opts = 'l' + short_opts
-        opts = ['playlist'] + opts
+    short_opts = 'Vhfiuc:ndF:O:o:p:x:y:s:t:I:'
+    opts = ['version', 'help', 'force', 'info', 'url', 'cookies', 'no-caption', 'no-merge', 'no-proxy', 'debug', 'json', 'format=', 'stream=', 'itag=', 'output-filename=', 'output-dir=', 'player=', 'http-proxy=', 'socks-proxy=', 'extractor-proxy=', 'lang=', 'timeout=', 'input-file=']
+#dead code? download_playlist is a function and always True
+#if download_playlist:
+    short_opts = 'l' + short_opts
+    opts = ['playlist'] + opts
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], short_opts, opts)
+        opts, args = getopt.gnu_getopt(sys.argv[1:], short_opts, opts)
     except getopt.GetoptError as err:
         log.e(err)
         log.e("try 'you-get --help' for more options")
@@ -1204,6 +1227,8 @@ def script_main(script_name, download, download_playlist, **kwargs):
     extractor_proxy = None
     traceback = False
     timeout = 600
+    urls_from_file = []
+
     for o, a in opts:
         if o in ('-V', '--version'):
             version()
@@ -1281,12 +1306,22 @@ def script_main(script_name, download, download_playlist, **kwargs):
             lang = a
         elif o in ('-t', '--timeout'):
             timeout = int(a)
+        elif o in ('-I', '--input-file'):
+            logging.debug('you are trying to load urls from {}'.format(a))
+            if playlist:
+                log.e("reading playlist from a file is unsupported and won't make your life easier")
+                sys.exit(2)
+            with open(a, 'r') as input_file:
+                for line in input_file:
+                    url = line.strip()
+                    urls_from_file.append(url)
         else:
             log.e("try 'you-get --help' for more options")
             sys.exit(2)
-    if not args:
+    if not args and not urls_from_file:
         print(help)
         sys.exit()
+    args.extend(urls_from_file)
 
     if (socks_proxy):
         try:
@@ -1326,6 +1361,8 @@ def script_main(script_name, download, download_playlist, **kwargs):
         else:
             sys.exit(1)
     except UnicodeEncodeError:
+        if traceback:
+            raise
         log.e('[error] oops, the current environment does not seem to support Unicode.')
         log.e('please set it to a UTF-8-aware locale first,')
         log.e('so as to save the video (with some Unicode characters) correctly.')
@@ -1376,7 +1413,7 @@ def url_to_module(url):
         video_host = r1(r'https?://([^/]+)/', url)
         video_url = r1(r'https?://[^/]+(.*)', url)
 
-    if video_host.endswith('.com.cn'):
+    if video_host.endswith('.com.cn') or video_host.endswith('.ac.cn'):
         video_host = video_host[:-3]
     domain = r1(r'(\.[^.]+\.[^.]+)$', video_host) or video_host
     assert domain, 'unsupported url: ' + url
